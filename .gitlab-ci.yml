@@ -1,0 +1,109 @@
+image: registry.gitlab.com/gitlab-org/terraform-images/stable:latest
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
+      variables:
+        env: "prod"
+        ref: "main"
+    - if: $CI_COMMIT_BRANCH == "develop" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"
+      variables:
+        env: "dev"
+        ref: "develop"
+
+variables:
+  TF_ROOT: terraform
+  TF_ADDRESS: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${env}_state
+  TF_VAR_AWS_ACCESS_KEY: ${AWS_ACCESS_KEY}
+  TF_VAR_AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+  TF_VAR_AWS_REGION: ${AWS_REGION}
+  TF_VAR_GITLAB_RUNNER_DEPLOY_PUBLIC_KEY: ${GITLAB_RUNNER_DEPLOY_PUBLIC_KEY}
+  TF_VAR_GITLAB_REGISTRATION_TOKEN: ${GITLAB_REGISTRATION_TOKEN}
+
+cache:
+  key: ${env}_state
+  paths:
+    - ${TF_ROOT}/.terraform
+
+stages:
+  - prepare
+  - validate
+  - build
+  - deploy
+  - downstream
+
+init:
+  stage: prepare
+  before_script:
+    #- apk add -q bash unzip
+    #- curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+    - cd ${TF_ROOT}
+    - echo ${env}
+    - echo ${TF_ADDRESS}
+    - gitlab-terraform -v
+  script:
+    #- tflint --init
+    #- tflint
+    - gitlab-terraform fmt -recursive
+    - gitlab-terraform init
+
+validate:
+  stage: validate
+  script:
+    - gitlab-terraform validate
+
+plan:
+  stage: build
+  script:
+    - gitlab-terraform plan -var-file=config/${env}.tfvars
+    - gitlab-terraform plan-json -var-file=config/${env}.tfvars
+  artifacts:
+    name: plan
+    paths:
+      - ${TF_ROOT}/plan.cache
+    reports:
+      terraform: ${TF_ROOT}/plan.json
+
+apply:
+  stage: deploy
+  script:
+    - gitlab-terraform apply
+  dependencies:
+    - plan
+  when: manual
+
+deploy-api-lambdas:
+  needs:
+    - apply
+  stage: downstream
+  trigger:
+    project: studi_projects/2023ss_d3i/pc1_umweltinstitut/lambdas/powermate-api-monorepo
+    strategy: depend
+    branch: ${ref}
+  rules:
+    - changes:
+        - /terraform/api.tf
+
+deploy-ingress-endpoint-lambda:
+  needs:
+    - apply
+  stage: downstream
+  trigger:
+    project: studi_projects/2023ss_d3i/pc1_umweltinstitut/lambdas/powermate-ingress-endpoint-lambda
+    strategy: depend
+    branch: ${ref}
+  rules:
+    - changes:
+        - /terraform/ingress_endpoint_sqs.tf
+
+deploy-authorizer-lambda:
+  needs:
+    - apply
+  stage: downstream
+  trigger:
+    project: studi_projects/2023ss_d3i/pc1_umweltinstitut/lambdas/powermate-authorizer
+    strategy: depend
+    branch: ${ref}
+  rules:
+    - changes:
+        - /terraform/authz.tf

@@ -1,0 +1,253 @@
+openapi: "3.0.2"
+info:
+  title: powermate_dev_api_gateway
+  version: "1.0"
+servers:
+  - url: "https://a23ypr2qzg.execute-api.eu-central-1.amazonaws.com/{basePath}"
+    variables:
+      basePath:
+        default: "api"
+security:
+  - "${authorizer_name}": []
+paths:
+  /passthrough:
+    x-amazon-apigateway-any-method:
+      x-amazon-apigateway-integration:
+        httpMethod: "POST"
+        uri: "arn:aws:apigateway:${region}:lambda:path/2015-03-31/functions/${passthrough_api_lambda_arn}/invocations"
+        passthroughBehavior: "when_no_match"
+        timeoutInMillis: 29000
+        type: "aws_proxy"
+  /devices:
+    get:
+      tags:
+        - device
+      operationId: listDevices
+      responses:
+        "200":
+          description: list of all devices
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListOfDevices"
+      description: get list of all devices
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${region}:lambda:path/2015-03-31/functions/${devices_api_lambda_arn}/invocations"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        type: "aws_proxy"
+  /devices/{deviceId}:
+    put:
+      tags:
+        - device
+      operationId: createDevice
+      responses:
+        "409":
+          description: device could not be created
+        "201":
+          description: device created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceCreated"
+      description: create a device
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${region}:lambda:path/2015-03-31/functions/${provisioning_api_lambda_arn}/invocations"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        type: "aws_proxy"
+    delete:
+      tags:
+        - device
+      operationId: deleteDevice
+      responses:
+        "404":
+          description: device to be deleted could not be found
+        "204":
+          description: device deleted
+      description: delete device
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${region}:lambda:path/2015-03-31/functions/${provisioning_api_lambda_arn}/invocations"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        type: "aws_proxy"
+    parameters:
+      - in: path
+        name: deviceId
+        required: true
+        description: unique identifier of a device
+        schema:
+          type: string
+  /devices/{deviceId}/ingress:
+    post:
+      tags:
+        - device
+      operationId: deviceIngress
+      responses:
+        "200":
+          description: device message accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngressMessage"
+      description: HTTP alternative for the AWS IoT MQTT endpoint (intended for smartphone-as-device only)
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${region}:lambda:path/2015-03-31/functions/${ingress_api_lambda_arn}/invocations"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        type: "aws_proxy"
+  /devices/{deviceId}/sensors/{sensorId}/current:
+    get:
+      tags:
+        - data
+      operationId: currentSensorValue
+      responses:
+        "200":
+          description: current value of sensor
+          content:
+            text/plain:
+              schema:
+                $ref: "#/components/schemas/SensorCurrentValue"
+      description: get current value of sensor
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${region}:lambda:path/2015-03-31/functions/${data_api_lambda_arn}/invocations"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        type: "aws_proxy"
+    parameters:
+      - in: path
+        name: deviceId
+        required: true
+        description: unique identifier of a device
+        schema:
+          type: string
+      - in: path
+        name: sensorId
+        required: true
+        description: unique identifier of a sensor of the device
+        schema:
+          type: string
+
+  /devices/{deviceId}/sensors/{sensorId}/historic:
+    get:
+      tags:
+        - data
+      operationId: historicSensorValues
+      responses:
+        "200":
+          description: historic time series values of sensor
+      description: get historc time series values of sensor
+      x-amazon-apigateway-integration:
+        uri: "arn:aws:apigateway:${region}:lambda:path/2015-03-31/functions/${data_api_lambda_arn}/invocations"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        type: "aws_proxy"
+    parameters:
+      - in: path
+        name: deviceId
+        required: true
+        description: unique identifier of a device
+        schema:
+          type: string
+      - in: path
+        name: sensorId
+        required: true
+        description: unique identifier of a sensor of the device
+        schema:
+          type: string
+      - in: query
+        name: from
+        example: "2021-08-12"
+        schema:
+          type: string
+          format: date
+        description: datetime for the latest value to be queried
+      - in: query
+        name: to
+        example: "2022-08-12"
+        schema:
+          type: string
+          format: date
+        description: datetime for the earliest value to be queried
+      - in: query
+        name: aggregate_method
+        schema:
+          type: string
+          enum: ["mean", "max", "min", "cumsum"]
+        example: "mean"
+      - in: query
+        name: aggregate_window
+        schema:
+          type: string
+          pattern: "^([0-9]*)([shdwm]{1}|min)$"
+        example: 15min
+
+components:
+  securitySchemes:
+    "${authorizer_name}":
+      type: apiKey
+      name: "Authorization"
+      in: "header"
+      x-amazon-apigateway-authtype: "oauth2"
+      x-amazon-apigateway-authorizer:
+        type: "token"
+        authorizerUri: "arn:aws:apigateway:${region}:lambda:path/2015-03-31/functions/${authorizer_lambda_arn}/invocations"
+        authorizerCredentials: "${authorizer_lambda_iam_role_arn}"
+
+  schemas:
+    DeviceMeasurement:
+      type: object
+      description: a measurement that devices publish
+      properties:
+        name:
+          type: string
+          description: name of the measurement
+          example: "abs"
+        value:
+          type: number
+          description: value of the measurement
+          example: 110
+    IngressMessage:
+      type: object
+      description: ingress message for the smartphone ingress endpoint
+      properties:
+        measurements:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeviceMeasurement"
+    SensorCurrentValue:
+      type: number
+      description: "current value of sensor"
+      example: 1920.19
+    Device:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "unique-device-identifier"
+          description: "unique identifier of a device"
+    ListOfDevices:
+      type: array
+      items:
+        $ref: "#/components/schemas/Device"
+    DeviceCreated:
+      type: object
+      properties:
+        name:
+          type: string
+          description: unique identifier of created device
+        arn:
+          type: string
+          description: AWS ARN of the AWS *Thing* that represents the device on AWS's side
+        pem:
+          type: string
+          description: client certificate of the device
+        public_key:
+          type: string
+          description: public key of the certificate of the device
+        private_key:
+          type: string
+          description: private key of the certificate of the device 🙈
+        root_ca:
+          type: string
+          description: root certificate of AWS
